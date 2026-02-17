@@ -1,0 +1,20 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-white text-black;
+    font-family: system-ui, -apple-system, sans-serif;
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply bg-black text-white px-4 py-2 rounded hover:bg-gray-800 transition-colors;
+  }
+
+  .btn-secondary {
+    @apply bg-white text-black border border-black px-4 py-2 rounded hover:bg-gray-100 transition-colors;
+  }
+}
