@@ -1,10 +1,114 @@
 /**
  * Glycogen Ledger Thresholds and Constants
  * All default values for depletion, debt, repletion, and scoring
+ *
+ * v2: Glycogen Store model — tracks actual store level instead of debt-only.
+ *     Supports surplus (buffer above baseline) and deficit (below baseline).
  */
 
 // ============================================================================
-// DEBT THRESHOLDS (grams)
+// GLYCOGEN STORE MODEL (v2)
+// ============================================================================
+
+export const GLYCOGEN_STORE = {
+  // Capacity formula: weight_kg × CAPACITY_PER_KG
+  // ~70kg athlete → 490g total (muscle ~350g + liver ~120g + blood glucose ~20g)
+  CAPACITY_PER_KG: 7.0,
+
+  // Supercompensation allows stores to exceed baseline by up to 20%
+  // Achieved via carb-loading protocols; decays naturally over 2-3 days
+  SUPERCOMP_MULTIPLIER: 1.20,
+
+  // Initial store on first ledger day (fraction of capacity)
+  // Assume athlete starts at baseline (100%) unless calibrated otherwise
+  INITIAL_FILL_RATIO: 1.0
+}
+
+// Fill-percentage thresholds for risk/readiness
+// These replace the gram-based debt thresholds for the store model
+export const FILL_THRESHOLDS = {
+  LOADED_MIN: 100,     // >100% = surplus / supercompensated
+  GREEN_MIN: 80,       // 80-100% = well fueled, ready to train
+  YELLOW_MIN: 60,      // 60-80% = slightly low, manageable
+  ORANGE_MIN: 40,      // 40-60% = compromised, fuel matters
+  // <40% = red / high risk
+}
+
+/**
+ * Calculate glycogen capacity for a given weight
+ * @param {number} weightKg - User's weight in kg
+ * @param {number|null} capacityOverride - Optional user override in grams
+ * @returns {number} Baseline capacity in grams
+ */
+export function calculateGlycogenCapacity(weightKg, capacityOverride = null) {
+  if (capacityOverride && capacityOverride > 0) return capacityOverride
+  return Math.round(weightKg * GLYCOGEN_STORE.CAPACITY_PER_KG)
+}
+
+/**
+ * Calculate supercompensation cap (max store can reach)
+ * @param {number} capacity - Baseline capacity in grams
+ * @returns {number} Supercomp cap in grams
+ */
+export function calculateSupercompCap(capacity) {
+  return Math.round(capacity * GLYCOGEN_STORE.SUPERCOMP_MULTIPLIER)
+}
+
+/**
+ * Derive deficit, surplus, and fill percentage from a store level
+ * @param {number} storeG - Current glycogen store in grams
+ * @param {number} capacity - Baseline capacity in grams
+ * @returns {{ deficit: number, surplus: number, fillPct: number }}
+ */
+export function deriveStoreMetrics(storeG, capacity) {
+  return {
+    deficit: Math.max(0, capacity - storeG),
+    surplus: Math.max(0, storeG - capacity),
+    fillPct: capacity > 0 ? Math.round((storeG / capacity) * 100) : 0
+  }
+}
+
+/**
+ * Get risk flag from fill percentage (store model)
+ * @param {number} fillPct - Fill percentage (0-120+)
+ * @returns {'green'|'yellow'|'orange'|'red'} Risk level
+ */
+export function getRiskFlagFromFill(fillPct) {
+  if (fillPct >= FILL_THRESHOLDS.GREEN_MIN) return 'green'
+  if (fillPct >= FILL_THRESHOLDS.YELLOW_MIN) return 'yellow'
+  if (fillPct >= FILL_THRESHOLDS.ORANGE_MIN) return 'orange'
+  return 'red'
+}
+
+/**
+ * Calculate readiness score from fill percentage (store model)
+ * Piecewise linear: higher fill → higher readiness, with bonus for surplus
+ * @param {number} fillPct - Fill percentage (0-120+)
+ * @returns {number} Readiness score 0-100
+ */
+export function calculateReadinessFromFill(fillPct) {
+  const fill = Math.max(0, Math.min(fillPct, 120))
+
+  if (fill >= 100) {
+    // 100-120% → 95-100 (surplus gives a small readiness bonus)
+    return Math.round(95 + 5 * Math.min(1, (fill - 100) / 20))
+  } else if (fill >= 80) {
+    // 80-100% → 80-95
+    return Math.round(80 + 15 * ((fill - 80) / 20))
+  } else if (fill >= 60) {
+    // 60-80% → 60-80
+    return Math.round(60 + 20 * ((fill - 60) / 20))
+  } else if (fill >= 40) {
+    // 40-60% → 35-60
+    return Math.round(35 + 25 * ((fill - 40) / 20))
+  } else {
+    // 0-40% → 10-35
+    return Math.round(10 + 25 * (fill / 40))
+  }
+}
+
+// ============================================================================
+// DEBT THRESHOLDS (grams) — DEPRECATED, kept for backward compatibility
 // ============================================================================
 
 export const DEBT_THRESHOLDS = {
@@ -35,7 +139,8 @@ export function getRiskFlag(debtGrams) {
 
 export const REPLETION = {
   EFFICIENCY: 0.70,           // 70% of carbs consumed go to glycogen
-  CAP_PER_DAY: 500           // Max 500g glycogen repletion per day
+  CAP_PER_DAY: 500,          // Max 500g glycogen repletion per day
+  DEFAULT_INTAKE_RATIO: 0.60  // Assume 60% of carb target when no intake logged
 }
 
 /**
@@ -142,14 +247,45 @@ export function isHardDay({ totalTSS, depletionTotal, workouts = [] }) {
 export const CARB_TARGET = {
   BASE_MULTIPLIER: 3.0,       // weight_kg * 3.0
   TRAINING_MULTIPLIER: 0.8,   // depletion * 0.8
-  PAYDOWN_MULTIPLIER: 0.25,   // debt * 0.25
+  PAYDOWN_MULTIPLIER: 0.25,   // deficit * 0.25 (replaces debt * 0.25)
   PAYDOWN_CAP: 200,           // Max 200g for paydown
+  SURPLUS_REDUCTION: 0.50,    // Surplus reduces target: surplus * 0.50
+  SURPLUS_REDUCTION_CAP: 100, // Max 100g reduction from surplus
   MIN_MULTIPLIER: 2.0,        // Min: weight_kg * 2
   MAX_MULTIPLIER: 8.0         // Max: weight_kg * 8
 }
 
 /**
- * Calculate carb target for a day (ledger-aware)
+ * Calculate carb target for a day (store-aware, v2)
+ * Surplus reduces target below base — "you're already loaded"
+ * Deficit increases target with paydown — "you need to catch up"
+ * @param {object} params
+ * @param {number} params.weightKg - User's weight in kg
+ * @param {number} params.depletionTotal - Total depletion for the day
+ * @param {number} params.deficit - Glycogen deficit in grams (0 if at/above baseline)
+ * @param {number} params.surplus - Glycogen surplus in grams (0 if at/below baseline)
+ * @returns {number} Carb target in grams
+ */
+export function calculateStoreCarbTarget({ weightKg, depletionTotal, deficit = 0, surplus = 0 }) {
+  const base = weightKg * CARB_TARGET.BASE_MULTIPLIER
+  const trainingAdd = depletionTotal * CARB_TARGET.TRAINING_MULTIPLIER
+
+  // Deficit paydown: same as old debt paydown
+  const paydownAdd = Math.min(deficit * CARB_TARGET.PAYDOWN_MULTIPLIER, CARB_TARGET.PAYDOWN_CAP)
+
+  // Surplus reduction: buffer means you need fewer carbs today
+  const surplusReduce = Math.min(surplus * CARB_TARGET.SURPLUS_REDUCTION, CARB_TARGET.SURPLUS_REDUCTION_CAP)
+
+  const target = base + trainingAdd + paydownAdd - surplusReduce
+  const min = weightKg * CARB_TARGET.MIN_MULTIPLIER
+  const max = weightKg * CARB_TARGET.MAX_MULTIPLIER
+
+  return Math.round(Math.max(min, Math.min(max, target)))
+}
+
+/**
+ * Calculate carb target for a day (debt-based, v1 — DEPRECATED)
+ * @deprecated Use calculateStoreCarbTarget instead
  * @param {object} params
  * @param {number} params.weightKg - User's weight in kg
  * @param {number} params.depletionTotal - Total depletion for the day
@@ -157,15 +293,8 @@ export const CARB_TARGET = {
  * @returns {number} Carb target in grams
  */
 export function calculateCarbTarget({ weightKg, depletionTotal, debtStart }) {
-  const base = weightKg * CARB_TARGET.BASE_MULTIPLIER
-  const trainingAdd = depletionTotal * CARB_TARGET.TRAINING_MULTIPLIER
-  const paydownAdd = Math.min(debtStart * CARB_TARGET.PAYDOWN_MULTIPLIER, CARB_TARGET.PAYDOWN_CAP)
-  
-  const target = base + trainingAdd + paydownAdd
-  const min = weightKg * CARB_TARGET.MIN_MULTIPLIER
-  const max = weightKg * CARB_TARGET.MAX_MULTIPLIER
-  
-  return Math.round(Math.max(min, Math.min(max, target)))
+  // Bridge to store model: debt is equivalent to deficit, no surplus concept
+  return calculateStoreCarbTarget({ weightKg, depletionTotal, deficit: debtStart, surplus: 0 })
 }
 
 // ============================================================================
@@ -220,11 +349,12 @@ export function calculateAlignmentScore({ carbsLogged, carbTarget, proteinLogged
 }
 
 // ============================================================================
-// READINESS SCORE CALCULATION
+// READINESS SCORE CALCULATION — DEPRECATED, kept for backward compatibility
 // ============================================================================
 
 /**
  * Calculate readiness score from glycogen debt (piecewise linear)
+ * @deprecated Use calculateReadinessFromFill instead
  * @param {number} debtGrams - Glycogen debt in grams
  * @returns {number} Readiness score 0-100
  */
@@ -261,7 +391,30 @@ export const WHAT_IF = {
 }
 
 /**
- * Calculate what-if readiness if extra carbs are consumed
+ * Calculate what-if store level if extra carbs are consumed (store model, v2)
+ * @param {number} currentStore - Current glycogen store in grams
+ * @param {number} capacity - Baseline capacity in grams
+ * @param {number} extraCarbs - Extra carbs to simulate (default 200g)
+ * @returns {object} { storeAfter, fillPctAfter, readinessAfter, surplusAfter }
+ */
+export function calculateWhatIfStore(currentStore, capacity, extraCarbs = WHAT_IF.EXTRA_CARBS) {
+  const supercompCap = calculateSupercompCap(capacity)
+  const glycogenCredit = extraCarbs * WHAT_IF.GLYCOGEN_CREDIT_MULTIPLIER
+  const storeAfter = Math.min(currentStore + glycogenCredit, supercompCap)
+  const { surplus: surplusAfter, fillPct: fillPctAfter } = deriveStoreMetrics(storeAfter, capacity)
+  const readinessAfter = calculateReadinessFromFill(fillPctAfter)
+
+  return {
+    storeAfter: Math.round(storeAfter),
+    fillPctAfter,
+    readinessAfter,
+    surplusAfter: Math.round(surplusAfter)
+  }
+}
+
+/**
+ * Calculate what-if readiness if extra carbs are consumed (debt model, v1)
+ * @deprecated Use calculateWhatIfStore instead
  * @param {number} currentDebt - Current debt at end of day
  * @param {number} extraCarbs - Extra carbs to simulate (default 200g)
  * @returns {object} { debtAfter, readinessAfter }

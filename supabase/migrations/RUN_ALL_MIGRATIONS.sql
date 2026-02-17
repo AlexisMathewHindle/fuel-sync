@@ -249,6 +249,21 @@ CREATE INDEX IF NOT EXISTS idx_day_summaries_debt ON day_summaries(user_id, debt
 CREATE INDEX IF NOT EXISTS idx_day_summaries_risk ON day_summaries(user_id, risk_flag) WHERE risk_flag IS NOT NULL;
 
 -- ============================================================================
+-- MIGRATION 008: Add Glycogen Store Model
+-- ============================================================================
+
+ALTER TABLE day_summaries
+ADD COLUMN IF NOT EXISTS glycogen_store_start_g NUMERIC,
+ADD COLUMN IF NOT EXISTS glycogen_store_end_g NUMERIC,
+ADD COLUMN IF NOT EXISTS glycogen_capacity_g NUMERIC,
+ADD COLUMN IF NOT EXISTS glycogen_surplus_g NUMERIC DEFAULT 0,
+ADD COLUMN IF NOT EXISTS glycogen_deficit_g NUMERIC DEFAULT 0,
+ADD COLUMN IF NOT EXISTS fill_pct NUMERIC;
+
+ALTER TABLE user_settings
+ADD COLUMN IF NOT EXISTS glycogen_capacity_override_g INTEGER;
+
+-- ============================================================================
 -- ALL MIGRATIONS COMPLETE!
 -- ============================================================================
 -- You should see "Success. No rows returned" if everything worked.

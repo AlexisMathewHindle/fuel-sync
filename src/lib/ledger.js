@@ -1,6 +1,9 @@
 /**
  * Glycogen Ledger Recompute Service
- * Deterministic day-by-day calculation of glycogen debt, targets, and insights
+ * Deterministic day-by-day calculation of glycogen store, targets, and insights
+ *
+ * v2: Full glycogen store simulation — tracks actual store level, supports
+ *     surplus (buffer above baseline) and deficit (below baseline).
  */
 
 import { supabase } from './supabase'
@@ -8,13 +11,18 @@ import { getWorkouts, getDayIntakes, getUserSettings } from './database'
 import { processWorkout, calculateDayDepletion } from './depletion'
 import {
   calculateRepletion,
-  calculateCarbTarget,
+  calculateStoreCarbTarget,
   calculateProteinTarget,
   calculateAlignmentScore,
-  calculateReadinessScore,
-  getRiskFlag,
+  calculateReadinessFromFill,
+  getRiskFlagFromFill,
   isHardDay,
   clamp,
+  REPLETION,
+  GLYCOGEN_STORE,
+  calculateGlycogenCapacity,
+  calculateSupercompCap,
+  deriveStoreMetrics,
   DEBT_THRESHOLDS
 } from './thresholds'
 import { generateDayInsights } from './insights'
@@ -159,51 +167,78 @@ export async function recomputeLedger(userId, options = {}) {
     
     if (onProgress) onProgress(40, 100, 'Computing ledger...')
     
+    // ── Glycogen store initialisation ──────────────────────────────────
+    const capacityOverride = settings?.glycogen_capacity_override_g || null
+    const capacity = calculateGlycogenCapacity(weightKg, capacityOverride)
+    const supercompCap = calculateSupercompCap(capacity)
+
+    // If user has a legacy starting_debt_g, convert it to a starting store.
+    // Otherwise start at 100% of capacity (INITIAL_FILL_RATIO).
+    let previousStoreEnd
+    if (settings?.starting_debt_g && settings.starting_debt_g > 0) {
+      previousStoreEnd = Math.max(0, capacity - settings.starting_debt_g)
+    } else {
+      previousStoreEnd = capacity * GLYCOGEN_STORE.INITIAL_FILL_RATIO
+    }
+
     // Process each day sequentially
     const daysSummaries = []
-    let previousDebtEnd = settings?.starting_debt_g || 0
-    
+
     for (let i = 0; i < allDates.length; i++) {
       const date = allDates[i]
       const dayWorkouts = workoutsByDate[date] || []
       const intake = intakesByDate[date]
       const hasIntake = !!intake
 
-      // Calculate depletion (always computed for display, even on no-data days)
+      // Calculate depletion (always computed, even on no-data days)
       const depletionTotal = calculateDayDepletion(dayWorkouts)
 
-      // Calculate repletion
-      const carbsLogged = intake?.carbs_g || 0
-      const proteinLogged = intake?.protein_g || 0
-      const repletion = hasIntake ? calculateRepletion(carbsLogged) : 0
+      // ── Store ledger update ─────────────────────────────────────────
+      const storeStart = previousStoreEnd
 
-      // Ledger update
-      const debtStart = previousDebtEnd
-      let debtEnd
+      // Derive deficit/surplus at start-of-day for target calculation
+      const startMetrics = deriveStoreMetrics(storeStart, capacity)
 
-      if (hasIntake) {
-        // Normal ledger: apply depletion and repletion
-        debtEnd = clamp(
-          debtStart + depletionTotal - repletion,
-          0,
-          DEBT_THRESHOLDS.DEBT_CAP
-        )
-      } else {
-        // Option B: No intake data — freeze debt, don't apply depletion
-        // We can't verify what the athlete actually ate, so carry forward
-        debtEnd = debtStart
-      }
-
-      // Calculate targets (still useful even on no-data days — shows what they should eat)
-      const carbTarget = calculateCarbTarget({
+      // Calculate targets first — needed for assumed repletion on no-intake days
+      const carbTarget = calculateStoreCarbTarget({
         weightKg,
         depletionTotal,
-        debtStart
+        deficit: startMetrics.deficit,
+        surplus: startMetrics.surplus
       })
 
       const proteinTarget = calculateProteinTarget(weightKg, proteinGPerKg)
 
-      // Calculate scores — only meaningful when intake data exists
+      // Calculate repletion
+      let carbsLogged, proteinLogged, repletion
+
+      if (hasIntake) {
+        carbsLogged = intake.carbs_g || 0
+        proteinLogged = intake.protein_g || 0
+        repletion = calculateRepletion(carbsLogged)
+      } else {
+        // No intake logged — assume athlete hit 60% of carb target
+        // This keeps store moving realistically instead of freezing flat
+        carbsLogged = Math.round(carbTarget * REPLETION.DEFAULT_INTAKE_RATIO)
+        proteinLogged = 0
+        repletion = calculateRepletion(carbsLogged)
+      }
+
+      // Store equation: store_end = clamp(store_start − depletion + repletion, 0, supercompCap)
+      const storeEnd = clamp(
+        storeStart - depletionTotal + repletion,
+        0,
+        supercompCap
+      )
+
+      // Derive end-of-day metrics
+      const { deficit, surplus, fillPct } = deriveStoreMetrics(storeEnd, capacity)
+
+      // ── Backward-compat debt columns ────────────────────────────────
+      const debtStart = clamp(capacity - storeStart, 0, DEBT_THRESHOLDS.DEBT_CAP)
+      const debtEnd = clamp(capacity - storeEnd, 0, DEBT_THRESHOLDS.DEBT_CAP)
+
+      // Calculate scores — alignment only meaningful when intake data exists
       const alignmentScore = hasIntake
         ? calculateAlignmentScore({
             carbsLogged,
@@ -213,8 +248,8 @@ export async function recomputeLedger(userId, options = {}) {
           })
         : null
 
-      const readinessScore = calculateReadinessScore(debtEnd)
-      const riskFlag = hasIntake ? getRiskFlag(debtEnd) : 'gray'
+      const readinessScore = calculateReadinessFromFill(fillPct)
+      const riskFlag = getRiskFlagFromFill(fillPct)
 
       // Determine if hard day
       const totalTSS = dayWorkouts.reduce((sum, w) => sum + (w.tss || 0), 0)
@@ -224,10 +259,18 @@ export async function recomputeLedger(userId, options = {}) {
         workouts: dayWorkouts
       })
 
-      // Store day summary
+      // Store day summary — includes both store columns (v2) and debt columns (compat)
       const daySummary = {
         date,
         has_intake: hasIntake,
+        // v2 store model columns
+        glycogen_store_start_g: Math.round(storeStart),
+        glycogen_store_end_g: Math.round(storeEnd),
+        glycogen_capacity_g: capacity,
+        glycogen_surplus_g: Math.round(surplus),
+        glycogen_deficit_g: Math.round(deficit),
+        fill_pct: fillPct,
+        // v1 debt columns (backward compat, derived from store)
         debt_start_g: Math.round(debtStart),
         debt_end_g: Math.round(debtEnd),
         depletion_total_g: Math.round(depletionTotal),
@@ -246,7 +289,7 @@ export async function recomputeLedger(userId, options = {}) {
       }
 
       daysSummaries.push(daySummary)
-      previousDebtEnd = debtEnd
+      previousStoreEnd = storeEnd
 
       if (onProgress && i % 5 === 0) {
         const progress = 40 + Math.round((i / allDates.length) * 40)

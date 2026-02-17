@@ -11,14 +11,12 @@
         <div class="text-xs text-gray-500">{{ dayOfWeek }}</div>
       </div>
 
-      <!-- Risk Badge (from ledger) — only when intake exists -->
-      <div v-if="daySummary?.risk_flag && daySummary.risk_flag !== 'gray'" :class="getRiskBadgeClass(daySummary.risk_flag)" class="px-2 py-1 rounded-full text-xs font-semibold">
-        {{ daySummary.risk_flag }}
-      </div>
-
-      <!-- No-intake badge -->
-      <div v-else-if="daySummary && !daySummary.has_intake" class="px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
-        no intake logged
+      <!-- Fuel Badge (glycogen store fill %) -->
+      <div v-if="daySummary?.risk_flag" class="flex items-center gap-1">
+        <div :class="getRiskBadgeClass(daySummary.risk_flag)" class="px-2 py-1 rounded-full text-xs font-semibold" title="Glycogen store fill level">
+          ⛽ {{ fillPct }}%
+        </div>
+        <span v-if="!daySummary.has_intake" class="text-[10px] text-gray-400" title="Intake not logged — store is estimated">est</span>
       </div>
 
       <!-- Rest Day Badge -->
@@ -65,15 +63,19 @@
 
     <!-- HAS INTAKE: Full coaching layout (3 tiles) -->
     <div v-else-if="daySummary && hasInsights" class="space-y-3">
-      <!-- Tile 1: Debt -->
+      <!-- Tile 1: Glycogen Store -->
       <div class="border border-gray-200 rounded-lg p-3">
-        <div class="text-xs font-medium text-gray-600 mb-1">Glycogen Debt</div>
+        <div class="text-xs font-medium text-gray-600 mb-1">Glycogen Store</div>
         <div class="flex items-baseline gap-2 mb-1">
-          <span class="text-2xl font-bold">{{ Math.round(daySummary.debt_end_g || 0) }}</span>
-          <span class="text-sm text-gray-600">g</span>
-          <span v-if="debtDelta !== 0" class="text-sm ml-auto" :class="debtDelta > 0 ? 'text-red-600' : 'text-green-600'">
-            {{ debtDelta > 0 ? '↑' : '↓' }} {{ Math.abs(debtDelta) }}g
+          <span class="text-2xl font-bold">{{ fillPct }}%</span>
+          <span class="text-sm text-gray-500">{{ storeEnd }}/{{ capacity }}g</span>
+          <span v-if="storeDelta !== 0" class="text-sm ml-auto" :class="storeDelta > 0 ? 'text-green-600' : 'text-red-600'">
+            {{ storeDelta > 0 ? '↑' : '↓' }} {{ Math.abs(storeDelta) }}g
           </span>
+        </div>
+        <div class="flex items-center gap-2 mb-1">
+          <span v-if="surplus > 0" class="text-xs text-blue-600 font-medium">+{{ surplus }}g surplus</span>
+          <span v-else-if="deficit > 0" class="text-xs text-orange-600 font-medium">−{{ deficit }}g deficit</span>
         </div>
         <div class="text-sm font-medium">{{ daySummary.insight_headline }}</div>
       </div>
@@ -91,16 +93,20 @@
       </div>
     </div>
 
-    <!-- Partial Insights (has intake + debt but no text insights yet) -->
-    <div v-else-if="daySummary && hasDebtData" class="space-y-3">
+    <!-- Partial Insights (has store data but no text insights yet) -->
+    <div v-else-if="daySummary && hasStoreData" class="space-y-3">
       <div class="border border-gray-200 rounded-lg p-3">
-        <div class="text-xs font-medium text-gray-600 mb-1">Glycogen Debt</div>
+        <div class="text-xs font-medium text-gray-600 mb-1">Glycogen Store</div>
         <div class="flex items-baseline gap-2 mb-1">
-          <span class="text-2xl font-bold">{{ Math.round(daySummary.debt_end_g || 0) }}</span>
-          <span class="text-sm text-gray-600">g</span>
-          <span v-if="debtDelta !== 0" class="text-sm ml-auto" :class="debtDelta > 0 ? 'text-red-600' : 'text-green-600'">
-            {{ debtDelta > 0 ? '↑' : '↓' }} {{ Math.abs(debtDelta) }}g
+          <span class="text-2xl font-bold">{{ fillPct }}%</span>
+          <span class="text-sm text-gray-500">{{ storeEnd }}/{{ capacity }}g</span>
+          <span v-if="storeDelta !== 0" class="text-sm ml-auto" :class="storeDelta > 0 ? 'text-green-600' : 'text-red-600'">
+            {{ storeDelta > 0 ? '↑' : '↓' }} {{ Math.abs(storeDelta) }}g
           </span>
+        </div>
+        <div class="flex items-center gap-2 mb-1">
+          <span v-if="surplus > 0" class="text-xs text-blue-600 font-medium">+{{ surplus }}g surplus</span>
+          <span v-else-if="deficit > 0" class="text-xs text-orange-600 font-medium">−{{ deficit }}g deficit</span>
         </div>
         <div class="text-xs text-gray-500">
           Depletion: {{ Math.round(daySummary.depletion_total_g || 0) }}g |
@@ -135,7 +141,7 @@
       </div>
     </div>
 
-    <!-- Fallback: daySummary exists but no debt/insights -->
+    <!-- Fallback: daySummary exists but no store/insights -->
     <div v-else-if="daySummary" class="space-y-3">
       <div class="grid grid-cols-2 gap-2">
         <div class="bg-gray-50 rounded px-2 py-1">
@@ -173,6 +179,7 @@
 
 <script setup>
 import { computed } from 'vue'
+import { calculateAlignmentScores, getScoreBadgeColor } from '../lib/alignmentScore'
 
 const props = defineProps({
   date: {
@@ -216,18 +223,25 @@ const hasInsights = computed(() => {
          props.daySummary?.insight_why
 })
 
-// Check if day has debt data (even without text insights)
-const hasDebtData = computed(() => {
-  return props.daySummary?.debt_end_g !== undefined &&
-         props.daySummary?.debt_end_g !== null
+// Check if day has store data (even without text insights)
+const hasStoreData = computed(() => {
+  return props.daySummary?.glycogen_store_end_g !== undefined &&
+         props.daySummary?.glycogen_store_end_g !== null
 })
 
-// Calculate debt delta from yesterday
-const debtDelta = computed(() => {
+// Store level info
+const fillPct = computed(() => props.daySummary?.fill_pct ?? 0)
+const storeEnd = computed(() => Math.round(props.daySummary?.glycogen_store_end_g ?? 0))
+const capacity = computed(() => Math.round(props.daySummary?.glycogen_capacity_g ?? 0))
+const surplus = computed(() => Math.round(props.daySummary?.glycogen_surplus_g ?? 0))
+const deficit = computed(() => Math.round(props.daySummary?.glycogen_deficit_g ?? 0))
+
+// Calculate store delta within this day (end - start)
+const storeDelta = computed(() => {
   if (!props.daySummary) return 0
-  const debtEnd = props.daySummary.debt_end_g || 0
-  const debtStart = props.daySummary.debt_start_g || 0
-  return Math.round(debtEnd - debtStart)
+  const end = props.daySummary.glycogen_store_end_g || 0
+  const start = props.daySummary.glycogen_store_start_g || 0
+  return Math.round(end - start)
 })
 
 // Risk badge styling
@@ -241,11 +255,35 @@ function getRiskBadgeClass(risk) {
   return classes[risk] || 'bg-gray-100 text-gray-800'
 }
 
-// Card border based on risk level
+// Severity ranking for color comparison (higher = worse)
+const COLOR_SEVERITY = { green: 0, yellow: 1, orange: 2, red: 3 }
+
+function worstColor(a, b) {
+  const sevA = COLOR_SEVERITY[a] ?? -1
+  const sevB = COLOR_SEVERITY[b] ?? -1
+  return sevA >= sevB ? a : b
+}
+
+// Alignment score computed from intake vs targets (same logic as DayDetailCard)
+const alignmentColor = computed(() => {
+  if (!props.dayIntake || !props.daySummary) return null
+  const scores = calculateAlignmentScores(props.dayIntake, props.daySummary)
+  return getScoreBadgeColor(scores.overallScore)
+})
+
+// Card border based on worst of risk level and alignment score
 const cardBorderClass = computed(() => {
   if (!props.daySummary) return 'border-gray-200'
 
-  const risk = props.daySummary.risk_flag
+  const riskColor = props.daySummary.risk_flag || null
+  const alignment = alignmentColor.value
+
+  // Pick the worst (most severe) color visible in the detail view
+  let effective = riskColor
+  if (alignment) {
+    effective = effective ? worstColor(effective, alignment) : alignment
+  }
+
   const borderMap = {
     green: 'border-green-300',
     yellow: 'border-yellow-300',
@@ -253,7 +291,7 @@ const cardBorderClass = computed(() => {
     red: 'border-red-300'
   }
 
-  return borderMap[risk] || 'border-gray-200'
+  return borderMap[effective] || 'border-gray-200'
 })
 </script>
 

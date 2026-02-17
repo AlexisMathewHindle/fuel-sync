@@ -11,41 +11,59 @@
     </div>
     
     <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-      <!-- Card 1: Current Glycogen Debt -->
+      <!-- Card 1: Glycogen Store Level -->
       <div class="border border-gray-200 rounded-lg p-4">
-        <h3 class="text-sm font-medium text-gray-600 mb-2">Current Glycogen Debt</h3>
-        <div class="flex items-baseline gap-2 mb-2">
-          <span class="text-3xl font-bold">{{ currentDebt }}</span>
-          <span class="text-sm text-gray-600">g</span>
+        <h3 class="text-sm font-medium text-gray-600 mb-2">Glycogen Store</h3>
+        <div class="flex items-baseline gap-2 mb-1">
+          <span class="text-3xl font-bold">{{ currentFillPct }}%</span>
+          <span class="text-sm text-gray-600">{{ currentStoreEnd }}/{{ currentCapacity }}g</span>
         </div>
-        <div class="flex items-center gap-2 mb-2">
-          <span 
+        <!-- Tank bar -->
+        <div class="relative w-full h-4 bg-gray-200 rounded-full mb-2 overflow-hidden">
+          <div
+            class="absolute inset-y-0 left-0 rounded-full transition-all duration-300"
+            :class="tankColor"
+            :style="{ width: (tankWidthPct / 120 * 100) + '%' }"
+          ></div>
+          <!-- 100% baseline marker -->
+          <div class="absolute inset-y-0 border-r-2 border-gray-800 opacity-40" :style="{ left: (100 / 120 * 100) + '%' }"></div>
+        </div>
+        <div class="flex items-center gap-2 mb-1">
+          <span
             class="px-2 py-0.5 text-xs rounded-full"
             :class="getRiskBadgeClass(currentRisk)"
           >
             {{ currentRisk }}
           </span>
-          <span v-if="debtTrend !== 0" class="text-sm" :class="debtTrend > 0 ? 'text-red-600' : 'text-green-600'">
-            {{ debtTrend > 0 ? '↑' : '↓' }} {{ Math.abs(debtTrend) }}g
-          </span>
+          <span v-if="currentSurplus > 0" class="text-xs text-blue-600 font-medium">+{{ currentSurplus }}g surplus</span>
+          <span v-else-if="currentDeficit > 0" class="text-xs text-orange-600 font-medium">−{{ currentDeficit }}g deficit</span>
         </div>
-        <p class="text-xs text-gray-500">{{ trendDays }}-day trend</p>
+        <div class="flex items-center gap-1">
+          <span v-if="storeTrend !== 0" class="text-xs" :class="storeTrend > 0 ? 'text-green-600' : 'text-red-600'">
+            {{ storeTrend > 0 ? '↑' : '↓' }} {{ Math.abs(storeTrend) }}g
+          </span>
+          <span class="text-xs text-gray-500">{{ trendDays }}-day trend</span>
+        </div>
       </div>
-      
-      <!-- Card 2: Debt Exposure -->
+
+      <!-- Card 2: Store Exposure -->
       <div class="border border-gray-200 rounded-lg p-4">
-        <h3 class="text-sm font-medium text-gray-600 mb-2">Debt Exposure</h3>
+        <h3 class="text-sm font-medium text-gray-600 mb-2">Store Exposure</h3>
         <div class="space-y-2">
           <div>
-            <div class="text-2xl font-bold">{{ compromisedDays }}</div>
-            <div class="text-xs text-gray-600">Compromised days (>350g)</div>
+            <div class="text-2xl font-bold">{{ lowFillDays }}</div>
+            <div class="text-xs text-gray-600">Low fill days (&lt;60%)</div>
           </div>
           <div>
-            <div class="text-lg font-semibold text-red-600">{{ highRiskDays }}</div>
-            <div class="text-xs text-gray-600">High risk days (>600g)</div>
+            <div class="text-lg font-semibold text-red-600">{{ veryLowFillDays }}</div>
+            <div class="text-xs text-gray-600">Very low days (&lt;40%)</div>
+          </div>
+          <div v-if="surplusDays > 0">
+            <div class="text-lg font-semibold text-blue-600">{{ surplusDays }}</div>
+            <div class="text-xs text-gray-600">Surplus days (&gt;100%)</div>
           </div>
           <div class="text-xs text-gray-500">
-            Longest streak: {{ longestStreak }} days
+            Longest low streak: {{ longestLowStreak }} days
           </div>
         </div>
       </div>
@@ -104,7 +122,7 @@
             </div>
           </div>
           <p class="text-xs text-gray-500">
-            Extra carbs = {{ whatIfDebtReduction }}g debt reduction
+            +{{ whatIfStoreGain }}g store → {{ whatIfFillPctAfter }}% fill
           </p>
         </div>
       </div>
@@ -114,7 +132,7 @@
 
 <script setup>
 import { computed } from 'vue'
-import { DEBT_THRESHOLDS, calculateWhatIfReadiness } from '../lib/thresholds'
+import { FILL_THRESHOLDS, calculateWhatIfStore, calculateGlycogenCapacity } from '../lib/thresholds'
 
 const props = defineProps({
   summaries: {
@@ -127,26 +145,41 @@ const props = defineProps({
   }
 })
 
-// Card 1: Current Glycogen Debt
-const currentDebt = computed(() => {
-  if (!props.summaries || props.summaries.length === 0) return 0
-  return Math.round(props.summaries[props.summaries.length - 1]?.debt_end_g || 0)
+// ── Helpers ─────────────────────────────────────────────────────────
+const latest = computed(() => {
+  if (!props.summaries || props.summaries.length === 0) return null
+  return props.summaries[props.summaries.length - 1]
 })
 
-const currentRisk = computed(() => {
-  if (!props.summaries || props.summaries.length === 0) return 'green'
-  return props.summaries[props.summaries.length - 1]?.risk_flag || 'green'
-})
+// Card 1: Glycogen Store Level
+const currentFillPct = computed(() => latest.value?.fill_pct ?? 100)
+const currentStoreEnd = computed(() => Math.round(latest.value?.glycogen_store_end_g ?? 0))
+const currentCapacity = computed(() => Math.round(latest.value?.glycogen_capacity_g ?? 490))
+const currentSurplus = computed(() => Math.round(latest.value?.glycogen_surplus_g ?? 0))
+const currentDeficit = computed(() => Math.round(latest.value?.glycogen_deficit_g ?? 0))
+
+const currentRisk = computed(() => latest.value?.risk_flag || 'green')
 
 const trendDays = computed(() => Math.min(7, props.summaries.length))
 
-const debtTrend = computed(() => {
+const storeTrend = computed(() => {
   if (!props.summaries || props.summaries.length < 2) return 0
   const trendLength = Math.min(7, props.summaries.length)
   const recent = props.summaries.slice(-trendLength)
-  const oldestDebt = recent[0]?.debt_end_g || 0
-  const newestDebt = recent[recent.length - 1]?.debt_end_g || 0
-  return Math.round(newestDebt - oldestDebt)
+  const oldestStore = recent[0]?.glycogen_store_end_g || 0
+  const newestStore = recent[recent.length - 1]?.glycogen_store_end_g || 0
+  return Math.round(newestStore - oldestStore)
+})
+
+// Tank bar: clamp display to 0-120%
+const tankWidthPct = computed(() => Math.min(120, Math.max(0, currentFillPct.value)))
+const tankColor = computed(() => {
+  const fill = currentFillPct.value
+  if (fill >= FILL_THRESHOLDS.LOADED_MIN) return 'bg-blue-500'
+  if (fill >= FILL_THRESHOLDS.GREEN_MIN) return 'bg-green-500'
+  if (fill >= FILL_THRESHOLDS.YELLOW_MIN) return 'bg-yellow-500'
+  if (fill >= FILL_THRESHOLDS.ORANGE_MIN) return 'bg-orange-500'
+  return 'bg-red-500'
 })
 
 function getRiskBadgeClass(risk) {
@@ -159,28 +192,32 @@ function getRiskBadgeClass(risk) {
   return classes[risk] || 'bg-gray-100 text-gray-800'
 }
 
-// Card 2: Debt Exposure
-const compromisedDays = computed(() => {
-  return props.summaries.filter(s => s.debt_end_g > DEBT_THRESHOLDS.COMPROMISED_THRESHOLD).length
+// Card 2: Store Exposure (replaces Debt Exposure)
+const lowFillDays = computed(() => {
+  return props.summaries.filter(s => (s.fill_pct ?? 100) < FILL_THRESHOLDS.YELLOW_MIN).length
 })
 
-const highRiskDays = computed(() => {
-  return props.summaries.filter(s => s.debt_end_g > DEBT_THRESHOLDS.HIGH_RISK_THRESHOLD).length
+const veryLowFillDays = computed(() => {
+  return props.summaries.filter(s => (s.fill_pct ?? 100) < FILL_THRESHOLDS.ORANGE_MIN).length
 })
 
-const longestStreak = computed(() => {
+const surplusDays = computed(() => {
+  return props.summaries.filter(s => (s.glycogen_surplus_g || 0) > 0).length
+})
+
+const longestLowStreak = computed(() => {
   let maxStreak = 0
   let currentStreak = 0
-  
+
   props.summaries.forEach(s => {
-    if (s.debt_end_g > DEBT_THRESHOLDS.COMPROMISED_THRESHOLD) {
+    if ((s.fill_pct ?? 100) < FILL_THRESHOLDS.YELLOW_MIN) {
       currentStreak++
       maxStreak = Math.max(maxStreak, currentStreak)
     } else {
       currentStreak = 0
     }
   })
-  
+
   return maxStreak
 })
 
@@ -227,17 +264,18 @@ const netCarbDeficit = computed(() => {
   }, 0))
 })
 
-// Card 5: Tomorrow Readiness
+// Card 5: Tomorrow Readiness (store-aware what-if)
 const currentReadiness = computed(() => {
-  if (!props.summaries || props.summaries.length === 0) return 0
-  return props.summaries[props.summaries.length - 1]?.readiness_score || 0
+  if (!latest.value) return 0
+  return latest.value.readiness_score || 0
 })
 
 const whatIfResult = computed(() => {
-  return calculateWhatIfReadiness(currentDebt.value, 200)
+  return calculateWhatIfStore(currentStoreEnd.value, currentCapacity.value, 200)
 })
 
 const whatIfReadiness = computed(() => whatIfResult.value.readinessAfter)
-const whatIfDebtReduction = computed(() => Math.round(currentDebt.value - whatIfResult.value.debtAfter))
+const whatIfFillPctAfter = computed(() => whatIfResult.value.fillPctAfter)
+const whatIfStoreGain = computed(() => Math.round(whatIfResult.value.storeAfter - currentStoreEnd.value))
 </script>
 

@@ -4,6 +4,14 @@ import { ref } from 'vue'
 export const user = ref(null)
 export const loading = ref(true)
 
+function getMagicLinkRedirectUrl() {
+  const configuredUrl = (import.meta.env.VITE_MAGIC_LINK_REDIRECT_URL || '').trim()
+  if (configuredUrl) {
+    return configuredUrl
+  }
+  return window.location.origin
+}
+
 // Initialize auth state
 export async function initAuth() {
   loading.value = true
@@ -25,10 +33,11 @@ export async function initAuth() {
 // Sign in with magic link
 export async function signInWithMagicLink(email) {
   try {
+    const emailRedirectTo = getMagicLinkRedirectUrl()
     const { error } = await supabase.auth.signInWithOtp({
       email,
       options: {
-        emailRedirectTo: window.location.origin
+        emailRedirectTo
       }
     })
     
@@ -62,4 +71,3 @@ export function getCurrentUser() {
 export function isAuthenticated() {
   return !!user.value
 }
-

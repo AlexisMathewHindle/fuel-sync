@@ -41,6 +41,7 @@ Instead of generic calorie tracking, it:
 4. Update `.env` with your Supabase credentials:
    - `VITE_SUPABASE_URL`: Your Supabase project URL
    - `VITE_SUPABASE_ANON_KEY`: Your Supabase anonymous key
+   - `VITE_MAGIC_LINK_REDIRECT_URL` (optional): URL to use for magic link redirect
 
 ### Development
 
@@ -99,6 +100,11 @@ The app uses Supabase magic link authentication:
 2. Enter your email
 3. Check your email for the magic link
 4. Click the link to sign in
+
+For environment-specific redirect behavior:
+- Local dev: leave `VITE_MAGIC_LINK_REDIRECT_URL` unset (defaults to `window.location.origin`, usually `http://localhost:5173`)
+- Production: set `VITE_MAGIC_LINK_REDIRECT_URL` to your deployed URL (for example, `https://your-site.netlify.app`)
+- In Supabase Auth settings, include both local and production URLs in Redirect URLs allowlist
 
 ## MVP Roadmap
 

@@ -88,6 +88,19 @@ DROP CONSTRAINT IF EXISTS user_settings_hr_max_check,
 ADD CONSTRAINT user_settings_hr_max_check 
   CHECK (hr_max >= 120 AND hr_max <= 220);
 
+-- Add glycogen store model columns (if they don't exist)
+ALTER TABLE day_summaries
+ADD COLUMN IF NOT EXISTS glycogen_store_start_g NUMERIC,
+ADD COLUMN IF NOT EXISTS glycogen_store_end_g NUMERIC,
+ADD COLUMN IF NOT EXISTS glycogen_capacity_g NUMERIC,
+ADD COLUMN IF NOT EXISTS glycogen_surplus_g NUMERIC DEFAULT 0,
+ADD COLUMN IF NOT EXISTS glycogen_deficit_g NUMERIC DEFAULT 0,
+ADD COLUMN IF NOT EXISTS fill_pct NUMERIC;
+
+-- Add glycogen capacity override to user_settings
+ALTER TABLE user_settings
+ADD COLUMN IF NOT EXISTS glycogen_capacity_override_g INTEGER;
+
 -- ============================================================================
 -- DONE!
 -- ============================================================================
