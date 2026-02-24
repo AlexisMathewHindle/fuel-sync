@@ -16,7 +16,8 @@
         <div :class="getRiskBadgeClass(daySummary.risk_flag)" class="px-2 py-1 rounded-full text-xs font-semibold" title="Glycogen store fill level">
           ⛽ {{ fillPct }}%
         </div>
-        <span v-if="!daySummary.has_intake" class="text-[10px] text-gray-400" title="Intake not logged — store is estimated">est</span>
+        <span v-if="isEstimatedIntake" class="text-[10px] text-gray-400" title="Intake not logged — store is estimated">est</span>
+        <span v-else-if="isNoIntakeModel" class="text-[10px] text-gray-400" title="No intake estimate available">none</span>
       </div>
 
       <!-- Rest Day Badge -->
@@ -25,8 +26,8 @@
       </div>
     </div>
 
-    <!-- NO INTAKE STATE: Training data + prompt to log -->
-    <div v-if="daySummary && !daySummary.has_intake" class="space-y-3">
+    <!-- NO INTAKE STATE: Training data + compact prompt -->
+    <div v-if="daySummary && intakeType !== 'logged'" class="space-y-3">
       <!-- Training Summary -->
       <div v-if="daySummary.total_tss > 0 || daySummary.total_duration_min > 0" class="grid grid-cols-2 gap-2">
         <div class="bg-gray-50 rounded px-2 py-1">
@@ -51,46 +52,40 @@
         </div>
       </div>
 
-      <!-- Prompt to log intake -->
-      <div class="border border-dashed border-gray-300 rounded-lg p-3 text-center">
-        <div class="text-sm text-gray-500 mb-1">No nutrition data for this day</div>
-        <div class="text-sm font-medium text-black flex items-center justify-center gap-1">
-          <span>＋</span>
-          <span>Log intake to unlock insights</span>
-        </div>
+      <div v-if="isEstimatedIntake" class="bg-amber-50 border border-amber-200 rounded px-2 py-1 text-xs text-amber-800">
+        Assumed intake: {{ estimatedIntakeG }}g carbs (60% of target)
+      </div>
+      <div v-else-if="isNoIntakeModel" class="bg-gray-50 border border-gray-200 rounded px-2 py-1 text-xs text-gray-600">
+        Intake estimate unavailable; repletion set to 0g.
+      </div>
+
+      <div class="text-xs text-gray-500">
+        No nutrition data logged. Tap to add intake and replace estimates.
       </div>
     </div>
 
-    <!-- HAS INTAKE: Full coaching layout (3 tiles) -->
+    <!-- HAS INTAKE: compact coaching layout -->
     <div v-else-if="daySummary && hasInsights" class="space-y-3">
-      <!-- Tile 1: Glycogen Store -->
-      <div class="border border-gray-200 rounded-lg p-3">
-        <div class="text-xs font-medium text-gray-600 mb-1">Glycogen Store</div>
-        <div class="flex items-baseline gap-2 mb-1">
+      <div class="border border-gray-200 rounded-lg p-3 bg-gray-50">
+        <div class="flex items-baseline gap-2">
           <span class="text-2xl font-bold">{{ fillPct }}%</span>
           <span class="text-sm text-gray-500">{{ storeEnd }}/{{ capacity }}g</span>
           <span v-if="storeDelta !== 0" class="text-sm ml-auto" :class="storeDelta > 0 ? 'text-green-600' : 'text-red-600'">
             {{ storeDelta > 0 ? '↑' : '↓' }} {{ Math.abs(storeDelta) }}g
           </span>
         </div>
-        <div class="flex items-center gap-2 mb-1">
-          <span v-if="surplus > 0" class="text-xs text-blue-600 font-medium">+{{ surplus }}g surplus</span>
-          <span v-else-if="deficit > 0" class="text-xs text-orange-600 font-medium">−{{ deficit }}g deficit</span>
+        <div class="flex items-center gap-2 mt-1 text-xs">
+          <span v-if="surplus > 0" class="text-blue-600 font-medium">+{{ surplus }}g surplus</span>
+          <span v-else-if="deficit > 0" class="text-orange-600 font-medium">−{{ deficit }}g deficit</span>
+          <span class="text-gray-500 ml-auto">trend: {{ debtTrendLabel }}</span>
         </div>
-        <div class="text-sm font-medium">{{ daySummary.insight_headline }}</div>
       </div>
 
-      <!-- Tile 2: Action -->
-      <div class="border border-gray-200 rounded-lg p-3 bg-blue-50">
-        <div class="text-xs font-medium text-gray-600 mb-1">Do This Today</div>
-        <div class="text-sm">{{ daySummary.insight_action }}</div>
+      <div class="text-sm font-medium">{{ daySummary.insight_headline }}</div>
+      <div class="text-sm text-gray-700">
+        <span class="font-semibold">Action:</span> {{ compactAction }}
       </div>
-
-      <!-- Tile 3: Why -->
-      <div class="border border-gray-200 rounded-lg p-3">
-        <div class="text-xs font-medium text-gray-600 mb-1">Why It Matters</div>
-        <div class="text-xs text-gray-700 leading-relaxed">{{ daySummary.insight_why }}</div>
-      </div>
+      <div class="text-xs text-gray-500">Tap for full detail and explanation</div>
     </div>
 
     <!-- Partial Insights (has store data but no text insights yet) -->
@@ -216,6 +211,22 @@ const dayOfWeek = computed(() => {
   return date.toLocaleDateString('en-US', { weekday: 'long' })
 })
 
+const intakeType = computed(() => {
+  if (!props.daySummary) return 'none'
+  if (props.daySummary.intake_type) return props.daySummary.intake_type
+  return props.daySummary.has_intake ? 'logged' : 'none'
+})
+
+const isEstimatedIntake = computed(() => intakeType.value === 'estimated')
+const isNoIntakeModel = computed(() => intakeType.value === 'none')
+const estimatedIntakeG = computed(() => Math.round(props.daySummary?.estimated_intake_g || 0))
+const debtTrendLabel = computed(() => props.daySummary?.debt_trend || 'stable')
+const compactAction = computed(() => {
+  const action = props.daySummary?.insight_action || ''
+  const stripped = action.split(' Protein:')[0].trim()
+  return stripped || action
+})
+
 // Check if day has insights (from ledger recompute)
 const hasInsights = computed(() => {
   return props.daySummary?.insight_headline &&
@@ -294,4 +305,3 @@ const cardBorderClass = computed(() => {
   return borderMap[effective] || 'border-gray-200'
 })
 </script>
-

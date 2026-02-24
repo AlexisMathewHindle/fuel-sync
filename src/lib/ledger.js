@@ -10,22 +10,21 @@ import { supabase } from './supabase'
 import { getWorkouts, getDayIntakes, getUserSettings } from './database'
 import { processWorkout, calculateDayDepletion } from './depletion'
 import {
-  calculateRepletion,
   calculateStoreCarbTarget,
   calculateProteinTarget,
   calculateAlignmentScore,
   calculateReadinessFromFill,
   getRiskFlagFromFill,
+  calculateDebtTrend,
   isHardDay,
   clamp,
-  REPLETION,
   GLYCOGEN_STORE,
   calculateGlycogenCapacity,
   calculateSupercompCap,
-  deriveStoreMetrics,
-  DEBT_THRESHOLDS
+  deriveStoreMetrics
 } from './thresholds'
 import { generateDayInsights } from './insights'
+import { resolveDailyIntakeModel, calculateBoundedDebt } from './ledgerModel'
 
 /**
  * Group workouts by date
@@ -104,9 +103,14 @@ export async function recomputeLedger(userId, options = {}) {
     
     // Fetch user settings
     const { data: settings } = await getUserSettings(userId)
-    const weightKg = settings?.weight_kg || 70
-    const proteinGPerKg = settings?.protein_g_per_kg || 1.8
-    const hrMax = settings?.hr_max || 180
+    const parsedWeight = Number(settings?.weight_kg)
+    const parsedProtein = Number(settings?.protein_g_per_kg)
+    const parsedHrMax = Number(settings?.hr_max)
+
+    // Guard against invalid settings values to prevent impossible targets.
+    const weightKg = Number.isFinite(parsedWeight) && parsedWeight > 0 ? parsedWeight : 70
+    const proteinGPerKg = Number.isFinite(parsedProtein) && parsedProtein > 0 ? parsedProtein : 1.8
+    const hrMax = Number.isFinite(parsedHrMax) && parsedHrMax > 0 ? parsedHrMax : 180
     
     // Fetch workouts
     const { data: workouts, error: workoutsError } = await getWorkouts(userId, {
@@ -168,15 +172,19 @@ export async function recomputeLedger(userId, options = {}) {
     if (onProgress) onProgress(40, 100, 'Computing ledger...')
     
     // ── Glycogen store initialisation ──────────────────────────────────
-    const capacityOverride = settings?.glycogen_capacity_override_g || null
+    const parsedCapacityOverride = Number(settings?.glycogen_capacity_override_g)
+    const capacityOverride = Number.isFinite(parsedCapacityOverride) && parsedCapacityOverride > 0
+      ? parsedCapacityOverride
+      : null
     const capacity = calculateGlycogenCapacity(weightKg, capacityOverride)
     const supercompCap = calculateSupercompCap(capacity)
 
     // If user has a legacy starting_debt_g, convert it to a starting store.
     // Otherwise start at 100% of capacity (INITIAL_FILL_RATIO).
+    const startingDebt = Number(settings?.starting_debt_g) || 0
     let previousStoreEnd
-    if (settings?.starting_debt_g && settings.starting_debt_g > 0) {
-      previousStoreEnd = Math.max(0, capacity - settings.starting_debt_g)
+    if (startingDebt > 0) {
+      previousStoreEnd = Math.max(0, capacity - startingDebt)
     } else {
       previousStoreEnd = capacity * GLYCOGEN_STORE.INITIAL_FILL_RATIO
     }
@@ -188,7 +196,6 @@ export async function recomputeLedger(userId, options = {}) {
       const date = allDates[i]
       const dayWorkouts = workoutsByDate[date] || []
       const intake = intakesByDate[date]
-      const hasIntake = !!intake
 
       // Calculate depletion (always computed, even on no-data days)
       const depletionTotal = calculateDayDepletion(dayWorkouts)
@@ -209,20 +216,14 @@ export async function recomputeLedger(userId, options = {}) {
 
       const proteinTarget = calculateProteinTarget(weightKg, proteinGPerKg)
 
-      // Calculate repletion
-      let carbsLogged, proteinLogged, repletion
-
-      if (hasIntake) {
-        carbsLogged = intake.carbs_g || 0
-        proteinLogged = intake.protein_g || 0
-        repletion = calculateRepletion(carbsLogged)
-      } else {
-        // No intake logged — assume athlete hit 60% of carb target
-        // This keeps store moving realistically instead of freezing flat
-        carbsLogged = Math.round(carbTarget * REPLETION.DEFAULT_INTAKE_RATIO)
-        proteinLogged = 0
-        repletion = calculateRepletion(carbsLogged)
-      }
+      const intakeModel = resolveDailyIntakeModel({ intake, carbTarget })
+      const hasIntake = intakeModel.hasIntake
+      const carbsLogged = intakeModel.carbsLogged
+      const proteinLogged = intakeModel.proteinLogged
+      const repletion = intakeModel.repletion
+      const intakeType = intakeModel.intakeType
+      const intakeConfidence = intakeModel.intakeConfidence
+      const estimatedIntakeG = intakeModel.estimatedIntakeG
 
       // Store equation: store_end = clamp(store_start − depletion + repletion, 0, supercompCap)
       const storeEnd = clamp(
@@ -235,8 +236,8 @@ export async function recomputeLedger(userId, options = {}) {
       const { deficit, surplus, fillPct } = deriveStoreMetrics(storeEnd, capacity)
 
       // ── Backward-compat debt columns ────────────────────────────────
-      const debtStart = clamp(capacity - storeStart, 0, DEBT_THRESHOLDS.DEBT_CAP)
-      const debtEnd = clamp(capacity - storeEnd, 0, DEBT_THRESHOLDS.DEBT_CAP)
+      const debtStart = calculateBoundedDebt(capacity, storeStart)
+      const debtEnd = calculateBoundedDebt(capacity, storeEnd)
 
       // Calculate scores — alignment only meaningful when intake data exists
       const alignmentScore = hasIntake
@@ -262,7 +263,10 @@ export async function recomputeLedger(userId, options = {}) {
       // Store day summary — includes both store columns (v2) and debt columns (compat)
       const daySummary = {
         date,
-        has_intake: hasIntake,
+        has_intake: intakeType === 'logged',
+        intake_type: intakeType,
+        intake_confidence: intakeConfidence,
+        estimated_intake_g: estimatedIntakeG,
         // v2 store model columns
         glycogen_store_start_g: Math.round(storeStart),
         glycogen_store_end_g: Math.round(storeEnd),
@@ -304,6 +308,11 @@ export async function recomputeLedger(userId, options = {}) {
       const day = daysSummaries[i]
       const isHardTomorrow = i < daysSummaries.length - 1 && daysSummaries[i + 1].is_hard_day
       const isBackToBack = isBackToBackHard(daysSummaries, i)
+      const debtWindow = daysSummaries
+        .slice(Math.max(0, i - 2), i + 1)
+        .map(d => Number(d.debt_end_g) || 0)
+
+      day.debt_trend = calculateDebtTrend(debtWindow)
       
       const insights = generateDayInsights({
         ...day,
@@ -356,4 +365,3 @@ export async function recomputeLedger(userId, options = {}) {
     }
   }
 }
-

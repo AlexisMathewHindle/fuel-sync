@@ -47,6 +47,10 @@ The migration adds these columns to `day_summaries`:
 - `insight_headline`
 - `insight_action`
 - `insight_why`
+- `intake_type`
+- `intake_confidence`
+- `estimated_intake_g`
+- `debt_trend`
 
 And these columns to `workouts`:
 - `depletion_g`
@@ -136,4 +140,3 @@ If you're still stuck after following these steps:
 1. **Share the exact error message** from browser console (F12)
 2. **Share the SQL Editor output** after running migration
 3. **Check if columns exist** using the verification query above
-

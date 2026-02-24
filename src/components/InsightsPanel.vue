@@ -132,7 +132,7 @@
 
 <script setup>
 import { computed } from 'vue'
-import { FILL_THRESHOLDS, calculateWhatIfStore, calculateGlycogenCapacity } from '../lib/thresholds'
+import { FILL_THRESHOLDS, calculateWhatIfStore } from '../lib/thresholds'
 
 const props = defineProps({
   summaries: {
@@ -146,9 +146,14 @@ const props = defineProps({
 })
 
 // ── Helpers ─────────────────────────────────────────────────────────
+const chronologicalSummaries = computed(() => {
+  if (!props.summaries || props.summaries.length === 0) return []
+  return [...props.summaries].sort((a, b) => (a.date || '').localeCompare(b.date || ''))
+})
+
 const latest = computed(() => {
-  if (!props.summaries || props.summaries.length === 0) return null
-  return props.summaries[props.summaries.length - 1]
+  if (chronologicalSummaries.value.length === 0) return null
+  return chronologicalSummaries.value[chronologicalSummaries.value.length - 1]
 })
 
 // Card 1: Glycogen Store Level
@@ -163,9 +168,9 @@ const currentRisk = computed(() => latest.value?.risk_flag || 'green')
 const trendDays = computed(() => Math.min(7, props.summaries.length))
 
 const storeTrend = computed(() => {
-  if (!props.summaries || props.summaries.length < 2) return 0
-  const trendLength = Math.min(7, props.summaries.length)
-  const recent = props.summaries.slice(-trendLength)
+  if (chronologicalSummaries.value.length < 2) return 0
+  const trendLength = Math.min(7, chronologicalSummaries.value.length)
+  const recent = chronologicalSummaries.value.slice(-trendLength)
   const oldestStore = recent[0]?.glycogen_store_end_g || 0
   const newestStore = recent[recent.length - 1]?.glycogen_store_end_g || 0
   return Math.round(newestStore - oldestStore)
@@ -194,22 +199,22 @@ function getRiskBadgeClass(risk) {
 
 // Card 2: Store Exposure (replaces Debt Exposure)
 const lowFillDays = computed(() => {
-  return props.summaries.filter(s => (s.fill_pct ?? 100) < FILL_THRESHOLDS.YELLOW_MIN).length
+  return chronologicalSummaries.value.filter(s => (s.fill_pct ?? 100) < FILL_THRESHOLDS.YELLOW_MIN).length
 })
 
 const veryLowFillDays = computed(() => {
-  return props.summaries.filter(s => (s.fill_pct ?? 100) < FILL_THRESHOLDS.ORANGE_MIN).length
+  return chronologicalSummaries.value.filter(s => (s.fill_pct ?? 100) < FILL_THRESHOLDS.ORANGE_MIN).length
 })
 
 const surplusDays = computed(() => {
-  return props.summaries.filter(s => (s.glycogen_surplus_g || 0) > 0).length
+  return chronologicalSummaries.value.filter(s => (s.glycogen_surplus_g || 0) > 0).length
 })
 
 const longestLowStreak = computed(() => {
   let maxStreak = 0
   let currentStreak = 0
 
-  props.summaries.forEach(s => {
+  chronologicalSummaries.value.forEach(s => {
     if ((s.fill_pct ?? 100) < FILL_THRESHOLDS.YELLOW_MIN) {
       currentStreak++
       maxStreak = Math.max(maxStreak, currentStreak)
@@ -223,15 +228,15 @@ const longestLowStreak = computed(() => {
 
 // Card 3: Training Load
 const totalDuration = computed(() => {
-  return props.summaries.reduce((sum, s) => sum + (s.total_duration_min || 0), 0)
+  return chronologicalSummaries.value.reduce((sum, s) => sum + (s.total_duration_min || 0), 0)
 })
 
 const totalTSS = computed(() => {
-  return Math.round(props.summaries.reduce((sum, s) => sum + (s.total_tss || 0), 0))
+  return Math.round(chronologicalSummaries.value.reduce((sum, s) => sum + (s.total_tss || 0), 0))
 })
 
 const hardDays = computed(() => {
-  return props.summaries.filter(s => s.is_hard_day).length
+  return chronologicalSummaries.value.filter(s => s.is_hard_day).length
 })
 
 function formatDuration(minutes) {
@@ -245,20 +250,20 @@ function formatDuration(minutes) {
 
 // Card 4: Fueling Consistency
 const hitTargetDays = computed(() => {
-  return props.summaries.filter(s => {
+  return chronologicalSummaries.value.filter(s => {
     if (!s.carb_target_g || !s.carbs_logged_g) return false
     return (s.carbs_logged_g / s.carb_target_g) >= 0.9
   }).length
 })
 
 const avgAlignmentScore = computed(() => {
-  const scores = props.summaries.filter(s => s.alignment_score > 0).map(s => s.alignment_score)
+  const scores = chronologicalSummaries.value.filter(s => s.alignment_score > 0).map(s => s.alignment_score)
   if (scores.length === 0) return 0
   return Math.round(scores.reduce((sum, score) => sum + score, 0) / scores.length)
 })
 
 const netCarbDeficit = computed(() => {
-  return Math.round(props.summaries.reduce((sum, s) => {
+  return Math.round(chronologicalSummaries.value.reduce((sum, s) => {
     const deficit = Math.max(0, (s.carb_target_g || 0) - (s.carbs_logged_g || 0))
     return sum + deficit
   }, 0))
@@ -278,4 +283,3 @@ const whatIfReadiness = computed(() => whatIfResult.value.readinessAfter)
 const whatIfFillPctAfter = computed(() => whatIfResult.value.fillPctAfter)
 const whatIfStoreGain = computed(() => Math.round(whatIfResult.value.storeAfter - currentStoreEnd.value))
 </script>
-

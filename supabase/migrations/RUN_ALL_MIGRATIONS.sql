@@ -243,6 +243,16 @@ DROP CONSTRAINT IF EXISTS user_settings_hr_max_check,
 ADD CONSTRAINT user_settings_hr_max_check
   CHECK (hr_max >= 120 AND hr_max <= 220);
 
+-- MIGRATION 006: Baseline Calibration columns
+ALTER TABLE user_settings
+ADD COLUMN IF NOT EXISTS starting_debt_g NUMERIC DEFAULT 0,
+ADD COLUMN IF NOT EXISTS baseline_prompt_dismissed BOOLEAN DEFAULT FALSE,
+ADD COLUMN IF NOT EXISTS baseline_set_at TIMESTAMPTZ;
+
+-- MIGRATION 007: Intake presence marker
+ALTER TABLE day_summaries
+ADD COLUMN IF NOT EXISTS has_intake BOOLEAN DEFAULT FALSE;
+
 -- Add indexes for performance
 CREATE INDEX IF NOT EXISTS idx_workouts_depletion ON workouts(user_id, depletion_g) WHERE depletion_g IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_day_summaries_debt ON day_summaries(user_id, debt_end_g) WHERE debt_end_g > 0;
@@ -264,9 +274,43 @@ ALTER TABLE user_settings
 ADD COLUMN IF NOT EXISTS glycogen_capacity_override_g INTEGER;
 
 -- ============================================================================
+-- MIGRATION 009: Engine Integrity (Phase 1)
+-- ============================================================================
+
+ALTER TABLE day_summaries
+ADD COLUMN IF NOT EXISTS intake_type TEXT DEFAULT 'none',
+ADD COLUMN IF NOT EXISTS intake_confidence TEXT DEFAULT 'low',
+ADD COLUMN IF NOT EXISTS estimated_intake_g NUMERIC,
+ADD COLUMN IF NOT EXISTS debt_trend TEXT DEFAULT 'stable';
+
+ALTER TABLE day_summaries
+DROP CONSTRAINT IF EXISTS day_summaries_intake_type_check,
+ADD CONSTRAINT day_summaries_intake_type_check
+  CHECK (intake_type IN ('logged', 'estimated', 'none', NULL));
+
+ALTER TABLE day_summaries
+DROP CONSTRAINT IF EXISTS day_summaries_intake_confidence_check,
+ADD CONSTRAINT day_summaries_intake_confidence_check
+  CHECK (intake_confidence IN ('high', 'low', NULL));
+
+ALTER TABLE day_summaries
+DROP CONSTRAINT IF EXISTS day_summaries_debt_trend_check,
+ADD CONSTRAINT day_summaries_debt_trend_check
+  CHECK (debt_trend IN ('increasing', 'stable', 'decreasing', NULL));
+
+ALTER TABLE day_summaries
+DROP CONSTRAINT IF EXISTS day_summaries_debt_start_range_check,
+ADD CONSTRAINT day_summaries_debt_start_range_check
+  CHECK (debt_start_g IS NULL OR (debt_start_g >= -150 AND debt_start_g <= 900));
+
+ALTER TABLE day_summaries
+DROP CONSTRAINT IF EXISTS day_summaries_debt_end_range_check,
+ADD CONSTRAINT day_summaries_debt_end_range_check
+  CHECK (debt_end_g IS NULL OR (debt_end_g >= -150 AND debt_end_g <= 900));
+
+-- ============================================================================
 -- ALL MIGRATIONS COMPLETE!
 -- ============================================================================
 -- You should see "Success. No rows returned" if everything worked.
 -- Now refresh your FuelSync app and go to /settings to run the ledger recompute.
 -- ============================================================================
-

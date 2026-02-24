@@ -112,13 +112,44 @@ export function calculateReadinessFromFill(fillPct) {
 // ============================================================================
 
 export const DEBT_THRESHOLDS = {
+  DEBT_MIN: -150,
+  DEBT_MAX: 900,
   GREEN_MAX: 150,
   YELLOW_MAX: 350,
   ORANGE_MAX: 600,
   RED_MAX: 900,
-  DEBT_CAP: 900,
+  DEBT_CAP: 900, // legacy alias; use DEBT_MAX for new code
   COMPROMISED_THRESHOLD: 350,
   HIGH_RISK_THRESHOLD: 600
+}
+
+// ============================================================================
+// DEBT TREND DETECTION
+// ============================================================================
+
+export const DEBT_TREND = {
+  WINDOW_DAYS: 3,
+  SLOPE_STABLE_THRESHOLD: 15 // grams/day; |slope| <= threshold => stable
+}
+
+/**
+ * Classify debt trend over recent days using 3-day slope.
+ * @param {number[]} debtValues - Debt values in chronological order (oldest -> newest)
+ * @returns {'increasing'|'stable'|'decreasing'}
+ */
+export function calculateDebtTrend(debtValues = []) {
+  if (!Array.isArray(debtValues) || debtValues.length < DEBT_TREND.WINDOW_DAYS) {
+    return 'stable'
+  }
+
+  const recent = debtValues.slice(-DEBT_TREND.WINDOW_DAYS)
+  const oldest = Number(recent[0] || 0)
+  const newest = Number(recent[recent.length - 1] || 0)
+  const slopePerDay = (newest - oldest) / (DEBT_TREND.WINDOW_DAYS - 1)
+
+  if (slopePerDay > DEBT_TREND.SLOPE_STABLE_THRESHOLD) return 'increasing'
+  if (slopePerDay < -DEBT_TREND.SLOPE_STABLE_THRESHOLD) return 'decreasing'
+  return 'stable'
 }
 
 /**
@@ -454,4 +485,3 @@ export function clamp(value, min, max) {
 export function roundToNearest(value, multiple) {
   return Math.round(value / multiple) * multiple
 }
-

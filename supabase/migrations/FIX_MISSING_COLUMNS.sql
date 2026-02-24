@@ -9,7 +9,8 @@
 ALTER TABLE day_summaries
 ADD COLUMN IF NOT EXISTS is_rest_day BOOLEAN DEFAULT FALSE,
 ADD COLUMN IF NOT EXISTS is_hard_day BOOLEAN DEFAULT FALSE,
-ADD COLUMN IF NOT EXISTS total_tss NUMERIC DEFAULT 0;
+ADD COLUMN IF NOT EXISTS total_tss NUMERIC DEFAULT 0,
+ADD COLUMN IF NOT EXISTS has_intake BOOLEAN DEFAULT FALSE;
 
 -- Update total_tss type if it exists as INTEGER
 DO $$
@@ -61,7 +62,11 @@ ADD COLUMN IF NOT EXISTS protein_logged_g NUMERIC,
 ADD COLUMN IF NOT EXISTS alignment_score INTEGER,
 ADD COLUMN IF NOT EXISTS insight_headline TEXT,
 ADD COLUMN IF NOT EXISTS insight_action TEXT,
-ADD COLUMN IF NOT EXISTS insight_why TEXT;
+ADD COLUMN IF NOT EXISTS insight_why TEXT,
+ADD COLUMN IF NOT EXISTS intake_type TEXT DEFAULT 'none',
+ADD COLUMN IF NOT EXISTS intake_confidence TEXT DEFAULT 'low',
+ADD COLUMN IF NOT EXISTS estimated_intake_g NUMERIC,
+ADD COLUMN IF NOT EXISTS debt_trend TEXT DEFAULT 'stable';
 
 -- Add constraints for day_summaries
 ALTER TABLE day_summaries
@@ -78,6 +83,31 @@ ALTER TABLE day_summaries
 DROP CONSTRAINT IF EXISTS day_summaries_alignment_score_check,
 ADD CONSTRAINT day_summaries_alignment_score_check 
   CHECK (alignment_score >= 0 AND alignment_score <= 100);
+
+ALTER TABLE day_summaries
+DROP CONSTRAINT IF EXISTS day_summaries_intake_type_check,
+ADD CONSTRAINT day_summaries_intake_type_check
+  CHECK (intake_type IN ('logged', 'estimated', 'none', NULL));
+
+ALTER TABLE day_summaries
+DROP CONSTRAINT IF EXISTS day_summaries_intake_confidence_check,
+ADD CONSTRAINT day_summaries_intake_confidence_check
+  CHECK (intake_confidence IN ('high', 'low', NULL));
+
+ALTER TABLE day_summaries
+DROP CONSTRAINT IF EXISTS day_summaries_debt_trend_check,
+ADD CONSTRAINT day_summaries_debt_trend_check
+  CHECK (debt_trend IN ('increasing', 'stable', 'decreasing', NULL));
+
+ALTER TABLE day_summaries
+DROP CONSTRAINT IF EXISTS day_summaries_debt_start_range_check,
+ADD CONSTRAINT day_summaries_debt_start_range_check
+  CHECK (debt_start_g IS NULL OR (debt_start_g >= -150 AND debt_start_g <= 900));
+
+ALTER TABLE day_summaries
+DROP CONSTRAINT IF EXISTS day_summaries_debt_end_range_check,
+ADD CONSTRAINT day_summaries_debt_end_range_check
+  CHECK (debt_end_g IS NULL OR (debt_end_g >= -150 AND debt_end_g <= 900));
 
 -- Add hr_max to user_settings (if it doesn't exist)
 ALTER TABLE user_settings
@@ -101,10 +131,15 @@ ADD COLUMN IF NOT EXISTS fill_pct NUMERIC;
 ALTER TABLE user_settings
 ADD COLUMN IF NOT EXISTS glycogen_capacity_override_g INTEGER;
 
+-- Add baseline calibration columns to user_settings
+ALTER TABLE user_settings
+ADD COLUMN IF NOT EXISTS starting_debt_g NUMERIC DEFAULT 0,
+ADD COLUMN IF NOT EXISTS baseline_prompt_dismissed BOOLEAN DEFAULT FALSE,
+ADD COLUMN IF NOT EXISTS baseline_set_at TIMESTAMPTZ;
+
 -- ============================================================================
 -- DONE!
 -- ============================================================================
 -- All missing columns should now be added.
 -- Refresh your app and try the ledger recompute again.
 -- ============================================================================
-

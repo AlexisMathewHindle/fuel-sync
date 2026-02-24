@@ -115,6 +115,7 @@ const userSettings = ref(null)
 
 // Time window filter
 const timeWindowOptions = [
+  { label: '3d', value: 3 },
   { label: '7d', value: 7 },
   { label: '14d', value: 14 },
   { label: '30d', value: 30 },
@@ -328,4 +329,3 @@ function goToDay(date) {
   router.push(`/calendar/${date}`)
 }
 </script>
-

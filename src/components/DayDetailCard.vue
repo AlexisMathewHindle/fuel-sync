@@ -27,14 +27,18 @@
           <div class="text-xs text-gray-600">Calories</div>
         </div>
         <div class="bg-gray-50 rounded-lg p-3">
-          <div class="text-lg font-bold">{{ daySummary.glycogen_debt_est || 0 }}</div>
-          <div class="text-xs text-gray-600">Glycogen Debt</div>
+          <div class="text-lg font-bold">{{ debtDisplay }}</div>
+          <div class="text-xs text-gray-600">Glycogen Debt (end)</div>
         </div>
       </div>
       
       <!-- Sport Mix -->
       <div v-if="sportMixDisplay" class="mt-2 text-sm text-gray-600">
         <strong>Sports:</strong> {{ sportMixDisplay }}
+      </div>
+
+      <div v-if="modelingNote" class="mt-2 text-xs text-gray-500">
+        <strong>Model:</strong> {{ modelingNote }}
       </div>
     </div>
     
@@ -163,6 +167,33 @@ const alignmentScore = computed(() => {
   return scores.value?.overallScore ?? null
 })
 
+const debtDisplay = computed(() => {
+  if (!props.daySummary) return 0
+  const debt = props.daySummary.debt_end_g ?? props.daySummary.glycogen_debt_est ?? 0
+  return Math.round(debt)
+})
+
+const modelingNote = computed(() => {
+  if (!props.daySummary) return null
+
+  const intakeType = props.daySummary.intake_type || (props.daySummary.has_intake ? 'logged' : 'none')
+  const debtTrend = props.daySummary.debt_trend || 'stable'
+
+  if (intakeType === 'logged') {
+    return `Intake logged. 3-day debt trend: ${debtTrend}.`
+  }
+
+  if (intakeType === 'estimated') {
+    const estimated = Math.round(
+      props.daySummary.estimated_intake_g ??
+      ((props.daySummary.carb_target_g || 0) * 0.6)
+    )
+    return `No intake log. Repletion estimated from ${estimated}g carbs. 3-day debt trend: ${debtTrend}.`
+  }
+
+  return `No intake data available, so repletion was set to 0g. 3-day debt trend: ${debtTrend}.`
+})
+
 const scoreBadgeClass = computed(() => {
   if (alignmentScore.value === null) return ''
   const color = getScoreBadgeColor(alignmentScore.value)
@@ -197,4 +228,3 @@ function getProgressBarClass(score) {
   return colorMap[color] || 'bg-gray-500'
 }
 </script>
-

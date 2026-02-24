@@ -6,7 +6,7 @@
  *     Falls back to debt-based thresholds when fill_pct is not available.
  */
 
-import { FILL_THRESHOLDS, roundToNearest } from './thresholds'
+import { FILL_THRESHOLDS, REPLETION, roundToNearest } from './thresholds'
 
 /**
  * Generate headline text for a day
@@ -62,7 +62,8 @@ export function generateAction({
   proteinTarget,
   isHardDay,
   isHardTomorrow,
-  isRestDay
+  isRestDay,
+  intakeType
 }) {
   let action = ''
 
@@ -93,6 +94,12 @@ export function generateAction({
     action += " Steady carbs, focus on recovery."
   }
 
+  if (intakeType === 'estimated') {
+    action += " Intake not logged; fueling is estimated."
+  } else if (intakeType === 'none') {
+    action += " Intake unknown; repletion assumed minimal."
+  }
+
   return action
 }
 
@@ -114,7 +121,11 @@ export function generateWhy({
   storeDelta,
   isHardDay,
   isBackToBack,
-  missedCarbs
+  missedCarbs,
+  intakeType,
+  debtTrend,
+  carbTarget,
+  carbsLogged
 }) {
   let why = ''
 
@@ -155,6 +166,23 @@ export function generateWhy({
     why += " Very low stores often show up as cravings, restless sleep, and higher perceived effort."
   }
 
+  if (debtTrend === 'increasing') {
+    why += " 3-day debt trend is rising."
+  } else if (debtTrend === 'decreasing') {
+    why += " 3-day debt trend is improving."
+  } else {
+    why += " 3-day debt trend is stable."
+  }
+
+  if (intakeType === 'estimated' && carbTarget > 0) {
+    const estimated = Math.round(carbTarget * REPLETION.DEFAULT_INTAKE_RATIO)
+    why += ` Intake was not logged, so the model used ${estimated}g (~${Math.round(REPLETION.DEFAULT_INTAKE_RATIO * 100)}% of target) for repletion.`
+  } else if (intakeType === 'none') {
+    why += " Intake was not logged and no estimate was possible, so repletion was set to 0g."
+  } else if (intakeType === 'logged' && carbsLogged === 0) {
+    why += " Intake is logged at 0g carbs."
+  }
+
   return why
 }
 
@@ -175,6 +203,8 @@ export function generateDayInsights(dayData) {
     carbs_logged_g = 0,
     carb_target_g = 0,
     protein_target_g = 0,
+    intake_type = 'none',
+    debt_trend = 'stable',
     is_hard_day = false,
     is_hard_tomorrow = false,
     is_rest_day = false,
@@ -199,7 +229,8 @@ export function generateDayInsights(dayData) {
     proteinTarget: protein_target_g,
     isHardDay: is_hard_day,
     isHardTomorrow: is_hard_tomorrow,
-    isRestDay: is_rest_day
+    isRestDay: is_rest_day,
+    intakeType: intake_type
   })
 
   const why = generateWhy({
@@ -209,7 +240,11 @@ export function generateDayInsights(dayData) {
     storeDelta,
     isHardDay: is_hard_day,
     isBackToBack: is_back_to_back,
-    missedCarbs
+    missedCarbs,
+    intakeType: intake_type,
+    debtTrend: debt_trend,
+    carbTarget: carb_target_g,
+    carbsLogged: carbs_logged_g
   })
 
   return {
@@ -218,4 +253,3 @@ export function generateDayInsights(dayData) {
     why
   }
 }
-

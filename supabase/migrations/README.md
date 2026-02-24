@@ -53,6 +53,36 @@ Adds day_intake table for tracking daily nutrition intake:
 - RLS policies for data isolation
 - Automatic timestamp triggers
 
+### 005_add_glycogen_ledger.sql
+
+Adds depletion/debt/insight fields for glycogen ledger v1.
+
+### 006_add_baseline_calibration.sql
+
+Adds baseline calibration fields to `user_settings`:
+- `starting_debt_g`
+- `baseline_prompt_dismissed`
+- `baseline_set_at`
+
+### 007_add_has_intake.sql
+
+Adds `has_intake` to `day_summaries` for intake presence tracking.
+
+### 008_add_glycogen_store.sql
+
+Adds glycogen store model fields:
+- `glycogen_store_start_g`, `glycogen_store_end_g`
+- `glycogen_capacity_g`, `glycogen_surplus_g`, `glycogen_deficit_g`
+- `fill_pct`
+- `glycogen_capacity_override_g` in `user_settings`
+
+### 009_engine_integrity_phase1.sql
+
+Adds Phase 1 model integrity fields:
+- `intake_type`, `intake_confidence`, `estimated_intake_g`
+- `debt_trend`
+- Debt range constraints for soft surplus buffer (`-150..900`)
+
 **Tables:**
 - `imports` - Tracks data imports from training platforms
 - `workouts` - Stores normalized workout data
@@ -150,4 +180,3 @@ DROP TABLE IF EXISTS day_summaries CASCADE;
 DROP TABLE IF EXISTS workouts CASCADE;
 DROP TABLE IF EXISTS imports CASCADE;
 ```
-
